@@ -158,7 +158,11 @@ class DatabaseManager:
             rows = self._get_conn().execute(
                 "SELECT * FROM decisions ORDER BY timestamp DESC LIMIT ?", (limit,)
             ).fetchall()
-            return [dict(r) for r in rows]
+            return [{
+                "type": "decision",
+                "data": {"action": r["action"], "skill": r["skill"], "reason": r["reason"]},
+                "timestamp": r["timestamp"],
+            } for r in rows]
         except Exception as e:
             logger.warning("get_decisions failed: %s", e)
             return []

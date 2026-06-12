@@ -269,6 +269,16 @@
                         body = `wallet: $${data.wallet_balance || 0} platforms: ${(data.platform_balances || []).map(p => p.platform + ' $' + p.balance).join(', ')}`;
                     } else if (t === 'services_posted') {
                         body = `posted ${data.count || 0} services`;
+                    } else if (t === 'harness') {
+                        body = `harness: ~$${data.estimated_earnings || 0} earned, ${(data.tasks_completed || 0)} tasks`;
+                    } else if (t === 'research') {
+                        body = `research: ${(data.opportunities || []).length} opportunities found`;
+                    } else if (t === 'training') {
+                        body = `training: ${data.report || 'completed'}`;
+                    } else if (t === 'tier_upgrade') {
+                        body = `tier upgraded: ${data.from || '?'} → ${data.to || '?'}`;
+                    } else if (t === 'weekly_report') {
+                        body = `report: best=${data.best_skill || '?'} win=${data.overall_win_rate || '?'}`;
                     } else {
                         body = `action: <strong>${data.action || '?'}</strong> skill: ${data.skill || '?'} <span style="color:#888">— ${data.reason || ''}</span>`;
                     }
