@@ -1,9 +1,11 @@
+import base64
 import json
 import logging
 import os
 import sqlite3
 import threading
 import time
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -13,12 +15,16 @@ logger = logging.getLogger("agent.database")
 DATA_DIR = Path(os.getenv("AGENT007_DATA_DIR", "/tmp/agent007_data"))
 DB_PATH = DATA_DIR / "agent007.db"
 BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_GITHUB_REPO = "ollamausage70-sudo/moneyy"
+BACKUP_GITHUB_PATH = "data/agent007_backup.json"
+BACKUP_GITHUB_BRANCH = "main"
 
 
 class DatabaseManager:
     def __init__(self):
         self.local = threading.local()
         self._init_db()
+        self._restore_from_github()
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self.local, "conn") or self.local.conn is None:
@@ -295,6 +301,7 @@ class DatabaseManager:
                 "harness": self.get_harness_stats(),
                 "tasks_seen_count": self.get_tasks_seen_count(),
                 "earnings_count": len(self.get_earnings(10000)),
+                "total_earned": self.get_total_earned(),
                 "backup_time": datetime.utcnow().isoformat(),
             }
             backup.write_text(json.dumps(data, indent=2, default=str))
@@ -302,10 +309,100 @@ class DatabaseManager:
             for old in old_backups[:-10]:
                 old.unlink()
             logger.info("Database backed up to %s", backup)
+            self._push_to_github()
             return backup
         except Exception as e:
             logger.warning("Backup failed: %s", e)
             return Path("")
+
+    # ── GitHub persistent backup ────────────────────────────
+
+    def _github_token(self) -> str:
+        return os.getenv("GITHUB_TOKEN", "")
+
+    def _restore_from_github(self):
+        token = self._github_token()
+        if not token:
+            return
+        try:
+            has_data = self._get_conn().execute("SELECT COUNT(*) as cnt FROM agent_state").fetchone()
+            if has_data and has_data["cnt"] > 0:
+                return
+        except Exception:
+            pass
+
+        url = "https://api.github.com/repos/%s/contents/%s?ref=%s" % (
+            BACKUP_GITHUB_REPO, BACKUP_GITHUB_PATH, BACKUP_GITHUB_BRANCH)
+        req = urllib.request.Request(url, headers={
+            "Authorization": "Bearer " + token,
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "AGENT007",
+        })
+        try:
+            resp = urllib.request.urlopen(req, timeout=15)
+            data = json.loads(resp.read())
+            content = base64.b64decode(data["content"]).decode()
+            backup = json.loads(content)
+            state = backup.get("state", {})
+            for k, v in state.items():
+                if isinstance(v, str):
+                    self.set_state(k, v)
+            logger.info("Restored state from GitHub: %s", {k: v for k, v in state.items() if v})
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                pass
+            else:
+                logger.warning("GitHub restore HTTP %d: %s", e.code, e.read()[:200])
+        except Exception as e:
+            logger.warning("GitHub restore failed: %s", e)
+
+    def _push_to_github(self):
+        token = self._github_token()
+        if not token:
+            return
+        try:
+            backup_data = {
+                "state": {r["key"]: r["value"] for r in self._get_conn().execute("SELECT * FROM agent_state").fetchall()},
+                "harness": self.get_harness_stats(),
+                "tasks_seen_count": self.get_tasks_seen_count(),
+                "earnings_count": len(self.get_earnings(10000)),
+                "total_earned": self.get_total_earned(),
+                "backup_time": datetime.utcnow().isoformat(),
+            }
+            content_b64 = base64.b64encode(json.dumps(backup_data, default=str).encode()).decode()
+
+            sha = ""
+            url = "https://api.github.com/repos/%s/contents/%s" % (BACKUP_GITHUB_REPO, BACKUP_GITHUB_PATH)
+            req = urllib.request.Request(url + "?ref=" + BACKUP_GITHUB_BRANCH, headers={
+                "Authorization": "Bearer " + token,
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "AGENT007",
+            })
+            try:
+                resp = urllib.request.urlopen(req, timeout=10)
+                existing = json.loads(resp.read())
+                sha = existing.get("sha", "")
+            except urllib.error.HTTPError:
+                pass
+
+            payload = {
+                "message": "backup: agent007 cycle state",
+                "content": content_b64,
+                "branch": BACKUP_GITHUB_BRANCH,
+            }
+            if sha:
+                payload["sha"] = sha
+
+            req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json",
+                "Accept": "application/vnd.github.v3+json",
+                "User-Agent": "AGENT007",
+            }, method="PUT")
+            urllib.request.urlopen(req, timeout=15)
+            logger.info("Backup pushed to GitHub")
+        except Exception as e:
+            logger.warning("GitHub push failed: %s", e)
 
     def get_total_earned(self) -> float:
         try:

@@ -104,7 +104,7 @@ def _scheduler():
             continue
 
         interval = config.CYCLE_INTERVAL_SECONDS
-        if agent and agent.cycle_count > 0 and agent.cycle_count % 10 == 0:
+        if agent and agent.cycle_count > 0:
             db.backup_to_json()
         time.sleep(interval)
 
