@@ -142,34 +142,31 @@ class AgentCore:
             # 5. Execute core action based on cycle
             await self._execute_csuite_action(cycle_mod, context)
 
-            # 6. CFO — review finances (every 2 cycles)
-            if self.cycle_count % 2 == 0:
-                cfo = self._get("CFO")
-                if cfo:
-                    fin = await cfo.think(context)
-                    self.db.add_decision("finance", "cfo", (fin or {}).get("recommendations", "Financial review")[:120], self.cycle_count)
+            # 6. CFO — review finances
+            cfo = self._get("CFO")
+            if cfo:
+                fin = await cfo.think(context)
+                self.db.add_decision("finance", "cfo", (fin or {}).get("recommendations", "Financial review")[:120], self.cycle_count)
 
-            # 7. Learning — analyze trends (every 3 cycles)
-            if self.cycle_count % 3 == 0:
-                learn = self._get("Learning")
-                if learn:
-                    insight = await learn.think(context)
-                    self.db.add_decision("analytics", "learning", (insight or {}).get("actionable_insights", str((insight or {}).get("recommended_focus", "")))[:120], self.cycle_count)
+            # 7. Learning — analyze trends
+            learn = self._get("Learning")
+            if learn:
+                insight = await learn.think(context)
+                self.db.add_decision("analytics", "learning", (insight or {}).get("actionable_insights", str((insight or {}).get("recommended_focus", "")))[:120], self.cycle_count)
 
-            # 8. Marketing — optimize proposals (every 5 cycles)
-            if self.cycle_count % 5 == 0:
-                mkt = self._get("Marketing")
-                if mkt:
-                    await mkt.think(context)
-                bounty = self.skills.get("bounty_hunter")
-                if bounty:
-                    posted = bounty.post_seed_services()
-                    self.db.log_event("services_posted", {"count": posted, "cycle": self.cycle_count})
-                    self.db.add_decision("marketing", "marketing", "Posted %d service listings" % posted, self.cycle_count)
+            # 8. Marketing — optimize proposals
+            mkt = self._get("Marketing")
+            if mkt:
+                await mkt.think(context)
+            bounty = self.skills.get("bounty_hunter")
+            if bounty:
+                posted = bounty.post_seed_services()
+                self.db.log_event("services_posted", {"count": posted, "cycle": self.cycle_count})
+                self.db.add_decision("marketing", "marketing", "Posted %d service listings" % posted, self.cycle_count)
 
             # 9. Payments — check for incoming
             payments = self._get("Payments")
-            if payments and self.cycle_count % 4 == 0:
+            if payments:
                 txns = payments.check_incoming_payments()
                 if txns:
                     self.db.add_decision("payment_check", "payments", "Found %d incoming transactions" % len(txns), self.cycle_count)
