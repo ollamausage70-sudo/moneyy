@@ -1,0 +1,13 @@
+{
+  "name": "agent007-omniroute",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OmniRoute AI gateway sidecar for AGENT007",
+  "scripts": {
+    "start": "omniroute",
+    "postinstall": "echo 'OmniRoute installed'"
+  },
+  "dependencies": {
+    "omniroute": "latest"
+  }
+}
