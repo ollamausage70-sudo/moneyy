@@ -140,13 +140,15 @@ def run_cycle():
         return jsonify({"status": "error", "error": "Agent not initialized — check /debug"}), 500
     if not has_llm:
         return jsonify({"status": "error", "error": "No LLM provider configured"}), 500
-    try:
+    def _run():
         loop = _dedicated_event_loop()
-        loop.run_until_complete(agent.run_cycle())
-        status = agent.get_status()
-        return {"status": "ok", "cycle": status["cycle"], "earnings": status["total_earned_usdc"]}
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
+        try:
+            loop.run_until_complete(agent.run_cycle())
+        except Exception as e:
+            logger.error("Manual cycle failed: %s", e)
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    return {"status": "ok", "message": "Cycle started in background thread"}
 
 
 @app.route("/api/scan")
@@ -197,6 +199,30 @@ def test_marketplaces():
         except Exception as e:
             results[mp.name] = {"status": "error", "error": str(e)[:200]}
     return jsonify(results)
+
+
+@app.route("/api/pipeline")
+def api_pipeline():
+    if agent is None:
+        return jsonify({"error": "No agent"}), 500
+    try:
+        bizdev = agent.csuite.get("BizDev") if hasattr(agent, "csuite") else None
+        if not bizdev:
+            return jsonify({"error": "No BizDev"}), 500
+        pipe = getattr(bizdev, "opportunity_pipeline", [])
+        return jsonify({
+            "pipeline_size": len(pipe),
+            "top_entries": [{
+                "task_id": e.get("task_id", "?"),
+                "title": e.get("title", "?")[:40],
+                "source": e.get("source", "?"),
+                "reward": e.get("reward", 0),
+                "score": e.get("score", 0),
+                "bid": e.get("recommended_bid", 0),
+            } for e in pipe[:5]],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/test/scan_debug")
