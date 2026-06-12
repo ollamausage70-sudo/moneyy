@@ -35,6 +35,7 @@ class AgentCore:
         self.cycle_count = int(db.get_state("cycle_count", "0"))
         self.last_decision = None
         self.last_scan_summary = {}
+        self._ceo_strategy = {}
 
         self.bus = MessageBus()
         self.csuite = CSuiteRegistry(self.bus)
@@ -43,6 +44,24 @@ class AgentCore:
 
         if self.cycle_count > 0:
             logger.info("Resumed from cycle %d", self.cycle_count)
+
+    # ── helpers ──────────────────────────────────────────────
+
+    def _get(self, name: str):
+        return self.csuite.get(name) if self.csuite else None
+
+    def _build_context(self) -> dict:
+        bounty: BountyHunterSkill = self.skills.get("bounty_hunter")
+        return {
+            "cycle": self.cycle_count,
+            "strategy": self._ceo_strategy,
+            "financial": self._get("CFO").get_financial_summary() if self._get("CFO") else {},
+            "operations": self._get("COO").get_ops_summary() if self._get("COO") else {},
+            "learning": self._get("Learning").get_learning_summary() if self._get("Learning") else {},
+            "strategy_stats": bounty.strategy if bounty else {},
+            "last_scan": self.last_scan_summary,
+            "business_tier": self.business_model.get_status() if hasattr(self, "business_model") else {},
+        }
 
     def set_harness(self, harness: HarnessEngine):
         self.harness = harness
@@ -68,125 +87,197 @@ class AgentCore:
         self.skills[name] = skill
         logger.info("Registered skill: %s", name)
 
-    async def decide_next_action(self) -> Optional[dict]:
-        cycle_mod = self.cycle_count % 6
+    # ── C-Suite driven cycle ─────────────────────────────────
+
+    async def run_cycle(self) -> None:
+        self.cycle_count += 1
+        logger.info("═══ Cycle %d ═══", self.cycle_count)
+        if self.cycle_count == 1:
+            await self._init_agenthansa_alliance()
+
+        try:
+            context = self._build_context()
+            cycle_mod = self.cycle_count % 6
+
+            # 1. Security — scan context for threats
+            sec = self._get("Security")
+            if sec:
+                safe, risk = sec.scan_input(json.dumps(context))
+                if not safe:
+                    logger.warning("Security blocked cycle: %s", risk)
+                    self.db.log_event("security_block", {"cycle": self.cycle_count, "risk": risk})
+                    self.db.set_state("cycle_count", str(self.cycle_count))
+                    return
+
+            # 2. COO — report ops status
+            coo = self._get("COO")
+            ops_decision = None
+            if coo:
+                ops_decision = await coo.think(context)
+                self.db.add_decision("operations", "coo", (ops_decision or {}).get("actions", "Ops analysis"), self.cycle_count)
+
+            # 3. CEO — set strategy
+            ceo = self._get("CEO")
+            if ceo:
+                strategy = await ceo.think(context)
+                self._ceo_strategy = ceo.get_strategy()
+                notes = (strategy or {}).get("strategic_notes", "Strategy updated")
+                aggression = (strategy or {}).get("aggression", "moderate")
+                self.db.add_decision("strategy", "ceo", "aggression=%s, notes=%s" % (aggression, notes[:120]), self.cycle_count)
+
+            # 4. BizDev — scan marketplaces every cycle
+            bizdev = self._get("BizDev")
+            if bizdev:
+                top = await bizdev.scan_opportunities()
+                if top:
+                    self.last_scan_summary = {
+                        "tasks_found": len(top),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "top_tasks": [{"title": t["title"][:30], "reward": t["reward"], "source": t["source"]} for t in top[:3]],
+                    }
+                    self.db.add_decision("scan", "bizdev", "Found %d tasks, top reward=$%.2f" % (len(top), top[0]["reward"] if top else 0), self.cycle_count)
+                else:
+                    self.last_scan_summary = {"tasks_found": 0, "timestamp": datetime.utcnow().isoformat()}
+
+            # 5. Execute core action based on cycle
+            await self._execute_csuite_action(cycle_mod, context)
+
+            # 6. CFO — review finances (every 2 cycles)
+            if self.cycle_count % 2 == 0:
+                cfo = self._get("CFO")
+                if cfo:
+                    fin = await cfo.think(context)
+                    self.db.add_decision("finance", "cfo", (fin or {}).get("recommendations", "Financial review")[:120], self.cycle_count)
+
+            # 7. Learning — analyze trends (every 3 cycles)
+            if self.cycle_count % 3 == 0:
+                learn = self._get("Learning")
+                if learn:
+                    insight = await learn.think(context)
+                    self.db.add_decision("analytics", "learning", (insight or {}).get("actionable_insights", str((insight or {}).get("recommended_focus", "")))[:120], self.cycle_count)
+
+            # 8. Marketing — optimize proposals (every 5 cycles)
+            if self.cycle_count % 5 == 0:
+                mkt = self._get("Marketing")
+                if mkt:
+                    await mkt.think(context)
+                bounty = self.skills.get("bounty_hunter")
+                if bounty:
+                    posted = bounty.post_seed_services()
+                    self.db.log_event("services_posted", {"count": posted, "cycle": self.cycle_count})
+                    self.db.add_decision("marketing", "marketing", "Posted %d service listings" % posted, self.cycle_count)
+
+            # 9. Payments — check for incoming
+            payments = self._get("Payments")
+            if payments and self.cycle_count % 4 == 0:
+                txns = payments.check_incoming_payments()
+                if txns:
+                    self.db.add_decision("payment_check", "payments", "Found %d incoming transactions" % len(txns), self.cycle_count)
+
+            # 10. Business model auto-upgrade
+            if hasattr(self, "business_model"):
+                self.business_model.check_auto_upgrade()
+
+            # Log summary every cycle
+            self.db.log_event("cycle_complete", {
+                "cycle": self.cycle_count,
+                "strategy_aggression": self._ceo_strategy.get("aggression_level", "moderate"),
+                "tasks_found": self.last_scan_summary.get("tasks_found", 0),
+            })
+            self.db.set_state("cycle_count", str(self.cycle_count))
+            logger.info("Cycle %d complete", self.cycle_count)
+
+        except Exception as e:
+            logger.error("Cycle %d failed: %s", self.cycle_count, e)
+            self.db.log_event("cycle_error", {"cycle": self.cycle_count, "error": str(e)})
+            self.db.set_state("cycle_count", str(self.cycle_count))
+
+    async def _execute_csuite_action(self, cycle_mod: int, context: dict) -> None:
         bounty: BountyHunterSkill = self.skills.get("bounty_hunter")
-        stats = bounty.strategy if bounty else {}
-
-        if cycle_mod == 0:
-            return {"action": "scan", "skill": "bounty_hunter", "reason": "Scan marketplaces for tasks"}
-        elif cycle_mod == 1:
-            return {"action": "post_services", "skill": "bounty_hunter", "reason": "Post service listings"}
-        elif cycle_mod == 2:
-            return {"action": "check", "skill": "bounty_hunter", "reason": "Check balances and generate weekly report"}
-        elif cycle_mod == 3:
-            return {"action": "train", "skill": "bounty_hunter", "reason": "Self-training: analyze outcomes, optimize strategy"}
-        elif cycle_mod == 4:
-            return {"action": "harness", "skill": "bounty_hunter", "reason": "Proactive earning: forum, red packets, quests, content"}
-        else:
-            research_needed = stats.get("bids_placed", 0) > 0 and stats.get("bids_won", 0) == 0 and self.cycle_count > 5
-            if research_needed:
-                return {"action": "research", "skill": "bounty_hunter", "reason": "Analyze learning data for better opportunities"}
-            return {"action": "harness", "skill": "bounty_hunter", "reason": "Content creation & passive earning"}
-
-    async def execute_action(self, decision: dict) -> None:
-        action = decision.get("action", "scan")
-        skill_name = decision.get("skill", "bounty_hunter")
-        skill = self.skills.get(skill_name)
-
-        if not skill:
-            logger.warning("Skill %s not found", skill_name)
+        if not bounty:
+            logger.warning("No bounty_hunter skill — cannot execute")
             return
 
-        self.db.add_decision(action, skill_name, decision.get("reason", ""), self.cycle_count)
-
-        if action == "scan":
-            print("=== SCAN START ===", flush=True)
-            tasks = await skill.find_opportunities()
-            print(f"=== SCAN FOUND {len(tasks)} TASKS ===", flush=True)
-            self.last_scan_summary = {"tasks_found": len(tasks), "timestamp": datetime.utcnow().isoformat()}
-
+        if cycle_mod == 0:
+            # Scan + bid on opportunities (BizDev already scanned above)
+            tasks = await bounty.find_opportunities()
             bid_count = 0
-            for task in tasks[:10]:
-                print(f"TASK: {task.id} reward={task.reward} source={task.source}", flush=True)
+            for task in tasks[:15]:
                 if task.reward <= 0 or bid_count >= 5:
-                    print(f"  SKIP: reward={task.reward} or bid_count={bid_count}", flush=True)
                     continue
-                bid = skill._compute_bid(task)
-                print(f"  BID=${bid}", flush=True)
-                proposal = skill._generate_proposal(task)
-                print(f"  PROPOSAL={proposal[:50]}", flush=True)
-                mp = next((m for m in skill.marketplaces if m.name == task.source), None)
-                print(f"  MP={mp.name if mp else 'NONE'}", flush=True)
-                if mp:
-                    try:
-                        bid_ok = mp.submit_bid(
-                            task.metadata["raw"].get("id", ""),
-                            proposal,
-                            bid,
-                        )
-                        print(f"  BID_OK={bid_ok}", flush=True)
-                        skill.strategy["bids_placed"] += 1
-                        skill._save_strategy()
-                        if bid_ok:
-                            bid_count += 1
-                            logger.info("Bid submitted on %s: $%.2f", task.id, bid)
-                        else:
-                            logger.info("Bid failed for %s", task.id)
-                    except Exception as e:
-                        print(f"  BID_ERROR={e}", flush=True)
-                        logger.error("Bid error %s: %s", task.id, e)
+                mp = next((m for m in bounty.marketplaces if m.name == task.source), None)
+                if not mp:
+                    continue
+                try:
+                    bid = bounty._compute_bid(task)
+                    proposal = bounty._generate_proposal(task)
+                    bid_ok = mp.submit_bid(
+                        task.metadata["raw"].get("id", ""),
+                        proposal,
+                        bid,
+                    )
+                    bounty.strategy["bids_placed"] += 1
+                    bounty._save_strategy()
+                    if bid_ok:
+                        bid_count += 1
+                        logger.info("Bid submitted on %s: $%.2f", task.id, bid)
+                    else:
+                        logger.info("Bid failed for %s", task.id)
+                except Exception as e:
+                    logger.error("Bid error %s: %s", task.id, e)
+            self.db.add_decision("bid", "bounty_hunter", "Submitted %d bids on %d tasks" % (bid_count, len(tasks)), self.cycle_count)
+            self.db.log_event("evaluation", {"cycle": self.cycle_count, "bids_placed": bid_count, "tasks_scanned": len(tasks)})
 
-        elif action == "post_services":
-            posted = skill.post_seed_services()
-            logger.info("Posted %d new services on dealwork", posted)
-            self.db.log_event("services_posted", {"count": posted})
-
-        elif action == "harness":
+        elif cycle_mod == 1:
+            # Harness — passive earning
             if self.harness:
-                logger.info("Starting proactive earning cycle...")
                 results = self.harness.run_all()
-                self.db.log_event("harness", results)
-                logger.info("Harness: %s estimated earnings", results.get("estimated_earnings", 0))
+                est = results.get("estimated_earnings", 0)
+                self.db.log_event("harness", {**results, "cycle": self.cycle_count})
+                self.db.add_decision("earn", "harness", "Passive earning: ~$%.2f estimated" % est, self.cycle_count)
+                logger.info("Harness: ~$%s estimated earnings", est)
 
-        elif action == "check":
+        elif cycle_mod == 2:
+            # Check — balances + report
             balance = self.wallet.get_usdc_balance()
-            txns = self.wallet.get_recent_transactions()
-            platform_balances = skill.check_platform_balances()
-            report = skill.generate_weekly_report()
+            platform_balances = bounty.check_platform_balances()
+            report = bounty.generate_weekly_report()
             if report:
-                logger.info("Weekly report: %s best, %s win rate, $%s earned",
-                            report.get("best_skill"),
-                            report.get("overall_win_rate"),
-                            report.get("total_earned"))
-                self.db.log_event("weekly_report", report)
+                self.db.log_event("weekly_report", {**report, "cycle": self.cycle_count})
             self.db.log_event("check", {
                 "wallet_balance": str(balance),
-                "new_transactions": len(txns),
                 "platform_balances": platform_balances,
+                "cycle": self.cycle_count,
             })
-            logger.info("Wallet: $%s, Platform balances: %s", balance, platform_balances)
+            self.db.add_decision("check", "bounty_hunter", "Wallet: $%s, platforms: %s" % (balance, platform_balances), self.cycle_count)
 
-        elif action == "train":
-            bounty_skill = skill
-            if bounty_skill:
-                report = bounty_skill.trainer.get_training_report()
-                logger.info("Training report: %s", report)
-                self.db.log_event("training", {"report": report})
-
-        elif action == "research":
-            prompt = (
+        elif cycle_mod == 3:
+            # Research — find new opportunities
+            research = self.brain.decide(
                 "Research new ways an AI agent can earn cryptocurrency in 2026. "
-                "Focus on platforms that are free to join and have tasks suitable "
-                "for an AI (writing, coding, data entry, translation). "
+                "Focus on platforms that are free to join with AI-suitable tasks "
+                "(writing, coding, data entry, translation). "
                 "List 3 specific platforms or methods. "
                 "Respond JSON: {\"opportunities\": [{\"name\": \"...\", "
                 "\"description\": \"...\", \"effort\": \"low/medium/high\", "
                 "\"setup_instructions\": \"...\"}]}"
             )
-            research = self.brain.decide(prompt)
-            self.db.log_event("research", research)
-            logger.info("Research found: %d opportunities", len(research.get("opportunities", [])))
+            self.db.log_event("research", {**research, "cycle": self.cycle_count})
+            count = len(research.get("opportunities", []))
+            self.db.add_decision("research", "bounty_hunter", "Found %d new earning opportunities" % count, self.cycle_count)
+
+        elif cycle_mod == 4:
+            # Training — analyze + optimize
+            if bounty.trainer:
+                report = bounty.trainer.get_training_report()
+                self.db.log_event("training", {"report": report, "cycle": self.cycle_count})
+                self.db.add_decision("train", "bounty_hunter", "Quality score: %s" % (report.get("avg_quality_score", "N/A")), self.cycle_count)
+
+        else:
+            # Post services (cycle_mod == 5)
+            posted = bounty.post_seed_services()
+            self.db.log_event("services_posted", {"count": posted, "cycle": self.cycle_count})
+            self.db.add_decision("services", "bounty_hunter", "Posted %d service listings" % posted, self.cycle_count)
 
     async def _deliver_for_task(self, skill, task):
         try:
@@ -235,30 +326,6 @@ class AgentCore:
                         logger.info("AgentHansa alliance: %s", current)
                 except Exception as e:
                     logger.warning("Alliance init failed: %s", e)
-
-    async def run_cycle(self) -> None:
-        self.cycle_count += 1
-        logger.info("--- Cycle %d ---", self.cycle_count)
-        if self.cycle_count == 1:
-            await self._init_agenthansa_alliance()
-        try:
-            decision = await self.decide_next_action()
-            self.last_decision = decision
-            if decision:
-                await self.execute_action(decision)
-            if self.cycle_count % 4 == 0:
-                balance = self.wallet.get_usdc_balance()
-                bounty: BountyHunterSkill = self.skills.get("bounty_hunter")
-                if bounty:
-                    logger.info("Stats | Bids: %d placed, %d won | Win rate: %.0f%% | Aggression: %.0f%%",
-                                bounty.strategy["bids_placed"],
-                                bounty.strategy["bids_won"],
-                                bounty.strategy["win_rate"] * 100,
-                                bounty.strategy["aggression"] * 100)
-            self.db.set_state("cycle_count", str(self.cycle_count))
-        except Exception as e:
-            logger.error("Cycle failed: %s", e)
-            self.db.log_event("cycle_error", {"cycle": self.cycle_count, "error": str(e)})
 
     async def run_forever(self):
         self.running = True
