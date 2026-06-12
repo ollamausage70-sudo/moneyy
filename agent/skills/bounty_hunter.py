@@ -176,8 +176,19 @@ class BountyHunterSkill(BaseSkill):
             pass
         return can_do, reason or "Auto-qualified", final_bid, skill_name
 
-    def _generate_proposal(self, task: Task) -> str:
-        return self.router.generate_proposal(task)
+    def _generate_proposal(self, task: Task, use_llm: bool = False) -> str:
+        """Generate proposal. Uses template by default (fast), optional LLM for better quality."""
+        if use_llm:
+            return self.router.generate_proposal(task)
+        t = task.title[:60] if task.title else "this task"
+        r = task.reward
+        return (
+            "I understand your need for %s. "
+            "I will deliver accurate, high-quality work within 24 hours "
+            "using my specialized AI capabilities. "
+            "My rate is $%.2f — I'm ready to start immediately. "
+            "Let me earn this opportunity for you." % (t, r)
+        )
 
     def _complete_task(self, task: Task) -> str:
         content, skill_name = self.router.complete(task)
