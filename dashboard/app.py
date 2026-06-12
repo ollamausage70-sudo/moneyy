@@ -100,12 +100,6 @@ def create_app(agent: AgentCore = None):
                             pass
         return jsonify(entries[-50:])
 
-    @app.route("/api/logs")
-    def api_logs():
-        if app.agent and app.agent.db:
-            return jsonify(app.agent.db.get_logs(100))
-        return jsonify([])
-
     @app.route("/api/database")
     def api_database():
         if app.agent and app.agent.db:
