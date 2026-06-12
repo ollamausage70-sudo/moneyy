@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from typing import Optional
@@ -17,6 +18,8 @@ class LLMBrain:
         self._setup_providers()
 
     def _setup_providers(self):
+        if config.OMNIROUTE_URL:
+            self.providers.append(OmniRouteProvider(config.OMNIROUTE_URL))
         if config.GEMINI_API_KEY:
             self.providers.append(GeminiProvider(config.GEMINI_API_KEY))
         if config.GROQ_API_KEY:
@@ -26,17 +29,17 @@ class LLMBrain:
         if not self.providers:
             raise RuntimeError(
                 "No LLM providers configured. "
-                "Set GEMINI_API_KEY, GROQ_API_KEY, or GITHUB_TOKEN in environment variables."
+                "Set OMNIROUTE_URL, GEMINI_API_KEY, GROQ_API_KEY, or GITHUB_TOKEN."
             )
 
     def think(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         last_error = None
         for provider in self.providers:
             try:
-                logger.info(f"Trying {provider.name}...")
+                logger.info("Trying %s...", provider.name)
                 return provider.generate(prompt, system_prompt)
             except Exception as e:
-                logger.warning(f"{provider.name} failed: {e}")
+                logger.warning("%s failed: %s", provider.name, e)
                 last_error = e
                 time.sleep(1)
         raise RuntimeError(f"All providers failed. Last error: {last_error}")
@@ -48,11 +51,29 @@ class LLMBrain:
             "Analyze the situation and decide the best action. "
             "Respond in JSON format with keys: 'decision', 'reason', 'confidence'.",
         )
-        import json
         try:
             return json.loads(result.strip().removeprefix("```json").removesuffix("```").strip())
         except json.JSONDecodeError:
             return {"decision": result, "reason": "raw response", "confidence": 0.5}
+
+
+class OmniRouteProvider:
+    def __init__(self, base_url: str):
+        self.name = "OmniRoute"
+        self.client = OpenAI(base_url=base_url.rstrip("/") + "/v1", api_key="sk-unused")
+
+    def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+        response = self.client.chat.completions.create(
+            model="auto",
+            messages=messages,
+            temperature=0.7,
+            max_tokens=4096,
+        )
+        return response.choices[0].message.content
 
 
 class GeminiProvider:

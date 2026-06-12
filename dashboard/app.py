@@ -76,7 +76,15 @@ def create_app(agent: AgentCore = None):
     @app.route("/api/decisions")
     def api_decisions():
         if app.agent and app.agent.db:
-            return jsonify(app.agent.db.get_decisions(50))
+            decisions = app.agent.db.get_decisions(50)
+            logs = app.agent.db.get_logs(100)
+            displayable = [l for l in logs if l.get("type") in (
+                "decision", "evaluation", "check", "services_posted",
+                "harness", "research", "training", "tier_upgrade",
+                "weekly_report", "cycle_error", "client_registered",
+            )]
+            merged = sorted(decisions + displayable, key=lambda x: x.get("timestamp", ""), reverse=True)
+            return jsonify(merged[:50])
         entries = []
         if LOG_FILE.exists():
             with open(LOG_FILE) as f:
@@ -91,6 +99,12 @@ def create_app(agent: AgentCore = None):
                         except json.JSONDecodeError:
                             pass
         return jsonify(entries[-50:])
+
+    @app.route("/api/logs")
+    def api_logs():
+        if app.agent and app.agent.db:
+            return jsonify(app.agent.db.get_logs(100))
+        return jsonify([])
 
     @app.route("/api/database")
     def api_database():
