@@ -26,17 +26,17 @@ logging.basicConfig(
 logger = logging.getLogger("run")
 
 required_vars = {
-    "GEMINI_API_KEY": config.GEMINI_API_KEY,
-    "GROQ_API_KEY": config.GROQ_API_KEY,
-    "GITHUB_TOKEN": config.GITHUB_TOKEN,
     "WALLET_ADDRESS": config.WALLET_ADDRESS,
 }
 
+has_llm = config.OMNIROUTE_URL or config.GEMINI_API_KEY or config.GROQ_API_KEY or config.GITHUB_TOKEN
+if not has_llm:
+    logger.warning("No LLM provider configured (OMNIROUTE_URL, GEMINI_API_KEY, GROQ_API_KEY, or GITHUB_TOKEN)")
+    logger.warning("Agent will use hardcoded decisions only.")
+
 missing = [k for k, v in required_vars.items() if not v]
 if missing:
-    logger.error("MISSING required environment variables: %s", ", ".join(missing))
-    logger.error("Agent will start in DEGRADED mode — cycles will be skipped.")
-    logger.error("Set these in Render dashboard or .env file.")
+    logger.warning("MISSING required env vars: %s", ", ".join(missing))
 
 mp_count = sum(1 for mp in config.MARKETPLACE_CONFIG.values() if mp.get("enabled"))
 logger.info("Marketplaces enabled: %d/6", mp_count)
@@ -56,8 +56,8 @@ try:
     agent.set_harness(harness)
     agent.init_csuite()
     logger.info("Agent + HarnessEngine + C-Suite initialized successfully")
-    if missing:
-        logger.warning("Agent running in degraded mode — missing env vars will be logged each cycle")
+    if not has_llm:
+        logger.warning("Agent running in degraded mode — no LLM provider configured")
 except Exception as e:
     logger.error("Agent init failed: %s", e)
     logger.info("App will serve /debug endpoint for troubleshooting")
@@ -83,12 +83,12 @@ def _scheduler():
 
     while True:
         try:
-            if agent and not missing:
+            if agent and has_llm:
                 loop.run_until_complete(agent.run_cycle())
                 logger.info("Scheduler cycle %d done", agent.cycle_count)
                 _scheduler_backoff = SCHEDULER_BACKOFF_INITIAL
-            elif missing:
-                logger.warning("Skipping cycle — missing env vars: %s", ", ".join(missing))
+            elif not has_llm:
+                logger.warning("Skipping cycle — no LLM provider configured")
 
             if render_url:
                 try:
@@ -117,6 +117,7 @@ logger.info("Scheduler started (interval: %ds)", config.CYCLE_INTERVAL_SECONDS)
 @app.route("/debug")
 def debug():
     keys = {
+        "OMNIROUTE_URL": bool(config.OMNIROUTE_URL),
         "GEMINI_API_KEY": bool(config.GEMINI_API_KEY),
         "GROQ_API_KEY": bool(config.GROQ_API_KEY),
         "GITHUB_TOKEN": bool(config.GITHUB_TOKEN),
@@ -127,7 +128,7 @@ def debug():
         "UGIG": bool(config.MARKETPLACE_CONFIG["ugig"]["api_key"]),
         "AGENTHANSA": bool(config.MARKETPLACE_CONFIG["agenthansa"]["api_key"]),
         "ANYTASKS": bool(config.MARKETPLACE_CONFIG["anytasks"]["api_key"]),
-        "missing_vars": missing,
+        "has_llm": has_llm,
         "mp_count": mp_count,
     }
     return keys
@@ -137,8 +138,8 @@ def debug():
 def run_cycle():
     if agent is None:
         return jsonify({"status": "error", "error": "Agent not initialized — check /debug"}), 500
-    if missing:
-        return jsonify({"status": "error", "error": f"Missing env vars: {missing}"}), 500
+    if not has_llm:
+        return jsonify({"status": "error", "error": "No LLM provider configured"}), 500
     try:
         loop = _dedicated_event_loop()
         loop.run_until_complete(agent.run_cycle())
