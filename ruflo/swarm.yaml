@@ -1,0 +1,150 @@
+# Ruflo Swarm Configuration for AGENT007 C-Suite
+# Maps each agent role to its Ruflo plugins and authority level
+
+swarm:
+  name: "AGENT007 Swarm"
+  description: "Autonomous AI agent business with full C-Suite structure"
+  version: "1.0.0"
+
+  # Communication protocol
+  protocol:
+    type: "mcp"
+    transport: "stdio"
+    heartbeat_interval: 30
+
+  # Agent definitions
+  agents:
+    - name: "CEO"
+      title: "Chief Executive Officer"
+      plugins:
+        - "ruflo-goals"
+        - "ruflo-workflows"
+      authority: 100
+      goals:
+        - "Achieve first $100 USDC in earnings"
+        - "Optimize marketplace selection for best ROI"
+        - "Build sustainable autonomous earning pipeline"
+      workflow: "strategy_planning"
+
+    - name: "CFO"
+      title: "Chief Financial Officer"
+      plugins:
+        - "ruflo-cost-tracker"
+        - "ruflo-observability"
+      authority: 90
+      goals:
+        - "Track every dollar earned and spent"
+        - "Maintain positive P&L"
+      workflow: "financial_management"
+
+    - name: "COO"
+      title: "Chief Operations Officer"
+      plugins:
+        - "ruflo-swarm"
+        - "ruflo-autopilot"
+      authority: 80
+      goals:
+        - "Zero failed task executions"
+        - "Maintain >80% task completion rate"
+      workflow: "operations_management"
+
+    - name: "BizDev"
+      title: "Business Development"
+      plugins:
+        - "ruflo-loop-workers"
+      authority: 60
+      goals:
+        - "Scan all marketplaces for high-value tasks"
+        - "Build opportunity pipeline with >10 tasks per cycle"
+      workflow: "opportunity_scanning"
+
+    - name: "Delivery"
+      title: "Delivery Manager"
+      plugins:
+        - "ruflo-sparc"
+        - "ruflo-ruvllm"
+      authority: 50
+      goals:
+        - "Execute tasks with 100% on-time delivery"
+        - "Achieve >90% quality score on all deliverables"
+      workflow: "task_execution"
+
+    - name: "QA"
+      title: "Quality Assurance"
+      plugins:
+        - "ruflo-testgen"
+      authority: 40
+      goals:
+        - "Maintain average quality score >85/100"
+        - "Zero defects in submitted deliverables"
+      workflow: "quality_review"
+
+    - name: "Learning"
+      title: "Learning & Analytics"
+      plugins:
+        - "ruflo-intelligence"
+        - "ruflo-rvf"
+      authority: 60
+      goals:
+        - "Identify top 3 most profitable task types"
+        - "Reduce cost per task by 20% through learning"
+      workflow: "trend_analysis"
+
+    - name: "Security"
+      title: "Security & Safety"
+      plugins:
+        - "ruflo-aidefence"
+      authority: 60
+      goals:
+        - "Block 100% of prompt injection attempts"
+        - "Zero security incidents"
+      workflow: "security_monitoring"
+
+    - name: "Payments"
+      title: "Payments Manager"
+      plugins: []
+      authority: 30
+      workflow: "payment_processing"
+
+    - name: "Marketing"
+      title: "Marketing Manager"
+      plugins: []
+      authority: 20
+      workflow: "reputation_management"
+
+  # Shared memory configuration
+  memory:
+    type: "agentdb"
+    path: "/var/data/agentdb"
+    vector_dimension: 1536
+    auto_sync: true
+
+  # Default plugin config
+  plugins:
+    ruflo-goals:
+      max_goals_per_agent: 5
+      auto_prioritize: true
+    ruflo-swarm:
+      max_concurrent_tasks: 3
+      task_timeout_seconds: 300
+    ruflo-sparc:
+      spec_required: true
+      plan_before_execute: true
+    ruflo-aidefence:
+      scan_inputs: true
+      scan_outputs: true
+      block_level: "strict"
+
+  # External integrations
+  integrations:
+    agenthansa:
+      type: "marketplace"
+      endpoints:
+        - "/alliance-war/quests"
+        - "/community/tasks"
+        - "/collective/bounties/public"
+    dealwork:
+      type: "marketplace"
+      endpoints:
+        - "/jobs"
+        - "/listings"

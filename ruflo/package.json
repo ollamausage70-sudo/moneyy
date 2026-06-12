@@ -1,0 +1,13 @@
+{
+  "name": "agent007-ruflo",
+  "version": "1.0.0",
+  "description": "Ruflo MCP server for AGENT007 C-Suite swarm",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js --dev"
+  },
+  "dependencies": {
+    "@ruvnet/ruflo": "^1.0.0"
+  }
+}
