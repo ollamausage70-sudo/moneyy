@@ -19,6 +19,7 @@ from agent.csuite import (
     MarketingAgent, LearningAgent, SecurityAgent,
 )
 from agent.business_model import BusinessModelManager
+from agent.skills.base import Task
 
 logger = logging.getLogger("agent.core")
 
@@ -195,38 +196,47 @@ class AgentCore:
             logger.warning("No bounty_hunter skill — cannot execute")
             return
 
-        if cycle_mod == 0:
-            # Scan + bid on opportunities (BizDev already scanned above)
-            tasks = await bounty.find_opportunities()
-            bid_count = 0
-            for task in tasks[:15]:
-                if task.reward <= 0 or bid_count >= 5:
-                    continue
-                mp = next((m for m in bounty.marketplaces if m.name == task.source), None)
-                if not mp:
-                    continue
-                try:
-                    bid = bounty._compute_bid(task)
-                    proposal = bounty._generate_proposal(task)
-                    bid_ok = mp.submit_bid(
-                        task.metadata["raw"].get("id", ""),
-                        proposal,
-                        bid,
-                    )
-                    bounty.strategy["bids_placed"] += 1
-                    bounty._save_strategy()
-                    if bid_ok:
-                        bid_count += 1
-                        logger.info("Bid submitted on %s: $%.2f", task.id, bid)
-                    else:
-                        logger.info("Bid failed for %s", task.id)
-                except Exception as e:
-                    logger.error("Bid error %s: %s", task.id, e)
-            self.db.add_decision("bid", "bounty_hunter", "Submitted %d bids on %d tasks" % (bid_count, len(tasks)), self.cycle_count)
-            self.db.log_event("evaluation", {"cycle": self.cycle_count, "bids_placed": bid_count, "tasks_scanned": len(tasks)})
+        # ── ALWAYS try to earn: bid on pipeline tasks EVERY cycle ──
+        # Use BizDev's pipeline (already populated by scan above) instead of
+        # re-scanning, which would return 0 new tasks (already marked seen).
+        bizdev = self._get("BizDev")
+        pipeline = bizdev.opportunity_pipeline if bizdev else []
+        bid_count = 0
+        for entry in pipeline[:10]:
+            if bid_count >= 5:
+                break
+            mp = next((m for m in bounty.marketplaces if m.name == entry.get("source")), None)
+            if not mp:
+                continue
+            try:
+                task_id = entry.get("task_id", "")
+                task = Task(
+                    id=task_id,
+                    title=entry.get("title", "Untitled"),
+                    description="",
+                    reward=entry.get("reward", 0),
+                    reward_currency="USDC",
+                    source=entry.get("source", ""),
+                    metadata={"raw": {}, "marketplace": entry.get("source", "")},
+                )
+                bid = bounty._compute_bid(task)
+                proposal = bounty._generate_proposal(task)
+                bid_ok = mp.submit_bid(task_id, proposal, bid)
+                bounty.strategy["bids_placed"] += 1
+                bounty._save_strategy()
+                if bid_ok:
+                    bid_count += 1
+                    logger.info("Bid submitted on %s: $%.2f", task_id, bid)
+                else:
+                    logger.info("Bid failed for %s", task_id)
+            except Exception as e:
+                logger.error("Bid error %s: %s", entry.get("task_id", "?"), e)
+        if bid_count > 0 or pipeline:
+            self.db.add_decision("bid", "bounty_hunter", "Submitted %d bids from %d pipeline tasks" % (bid_count, len(pipeline)), self.cycle_count)
+            self.db.log_event("evaluation", {"cycle": self.cycle_count, "bids_placed": bid_count, "pipeline_size": len(pipeline)})
 
-        elif cycle_mod == 1:
-            # Harness — passive earning
+        # ── ALSO run the rotation maintenance phase ──
+        if cycle_mod == 1:
             if self.harness:
                 results = self.harness.run_all()
                 est = results.get("estimated_earnings", 0)
@@ -235,7 +245,6 @@ class AgentCore:
                 logger.info("Harness: ~$%s estimated earnings", est)
 
         elif cycle_mod == 2:
-            # Check — balances + report
             balance = self.wallet.get_usdc_balance()
             platform_balances = bounty.check_platform_balances()
             report = bounty.generate_weekly_report()
@@ -249,7 +258,6 @@ class AgentCore:
             self.db.add_decision("check", "bounty_hunter", "Wallet: $%s, platforms: %s" % (balance, platform_balances), self.cycle_count)
 
         elif cycle_mod == 3:
-            # Research — find new opportunities
             research = self.brain.decide(
                 "Research new ways an AI agent can earn cryptocurrency in 2026. "
                 "Focus on platforms that are free to join with AI-suitable tasks "
@@ -264,14 +272,12 @@ class AgentCore:
             self.db.add_decision("research", "bounty_hunter", "Found %d new earning opportunities" % count, self.cycle_count)
 
         elif cycle_mod == 4:
-            # Training — analyze + optimize
             if bounty.trainer:
                 report = bounty.trainer.get_training_report()
                 self.db.log_event("training", {"report": report, "cycle": self.cycle_count})
                 self.db.add_decision("train", "bounty_hunter", "Quality score: %s" % (report.get("avg_quality_score", "N/A")), self.cycle_count)
 
-        else:
-            # Post services (cycle_mod == 5)
+        elif cycle_mod == 5:
             posted = bounty.post_seed_services()
             self.db.log_event("services_posted", {"count": posted, "cycle": self.cycle_count})
             self.db.add_decision("services", "bounty_hunter", "Posted %d service listings" % posted, self.cycle_count)
