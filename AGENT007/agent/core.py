@@ -207,9 +207,11 @@ class AgentCore:
                 break
             mp = next((m for m in bounty.marketplaces if m.name == entry.get("source")), None)
             if not mp:
+                logger.debug("No marketplace match for source='%s' — available: %s", entry.get("source"), [m.name for m in bounty.marketplaces])
                 continue
             try:
                 task_id = entry.get("task_id", "")
+                raw_id = task_id.split("-", 1)[1] if "-" in task_id else task_id
                 task = Task(
                     id=task_id,
                     title=entry.get("title", "Untitled"),
@@ -221,14 +223,14 @@ class AgentCore:
                 )
                 bid = bounty._compute_bid(task)
                 proposal = bounty._generate_proposal(task)
-                bid_ok = mp.submit_bid(task_id, proposal, bid)
+                bid_ok = mp.submit_bid(raw_id, proposal, bid)
                 bounty.strategy["bids_placed"] += 1
                 bounty._save_strategy()
                 if bid_ok:
                     bid_count += 1
-                    logger.info("Bid submitted on %s: $%.2f", task_id, bid)
+                    logger.info("Bid submitted on %s (raw=%s): $%.2f", task_id, raw_id, bid)
                 else:
-                    logger.info("Bid failed for %s", task_id)
+                    logger.warning("Bid REJECTED for %s (raw=%s): $%.2f — check marketplace API or auth", task_id, raw_id, bid)
             except Exception as e:
                 logger.error("Bid error %s: %s", entry.get("task_id", "?"), e)
         if bid_count > 0 or pipeline:
