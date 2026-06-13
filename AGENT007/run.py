@@ -48,6 +48,7 @@ from flask import jsonify
 agent = None
 db = DatabaseManager()
 _cycle_lock = threading.Lock()
+_cycle_lock_time = 0  # timestamp when lock was acquired
 
 try:
     agent = AgentCore(db)
@@ -86,6 +87,7 @@ def _scheduler():
         try:
             if agent and has_llm:
                 with _cycle_lock:
+                    _cycle_lock_time = time.time()
                     loop.run_until_complete(agent.run_cycle())
                     logger.info("Scheduler cycle %d done", agent.cycle_count)
                 _scheduler_backoff = SCHEDULER_BACKOFF_INITIAL
@@ -143,7 +145,14 @@ def run_cycle():
     if not has_llm:
         return jsonify({"status": "error", "error": "No LLM provider configured"}), 500
     if not _cycle_lock.acquire(blocking=False):
-        return jsonify({"status": "busy", "message": "Cycle already in progress"}), 429
+        # Check if lock is stale (held >10 min)
+        if time.time() - _cycle_lock_time > 600:
+            logger.warning("Force-releasing stale cycle lock (held >10min)")
+            _cycle_lock.release()
+            _cycle_lock.acquire()
+        else:
+            return jsonify({"status": "busy", "message": "Cycle already in progress"}), 429
+    _cycle_lock_time = time.time()
     def _run():
         try:
             loop = _dedicated_event_loop()
@@ -155,6 +164,17 @@ def run_cycle():
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
     return {"status": "ok", "message": "Cycle started in background thread"}
+
+
+@app.route("/api/reset_lock")
+def reset_cycle_lock():
+    global _cycle_lock_time
+    try:
+        _cycle_lock.release()
+    except RuntimeError:
+        pass
+    _cycle_lock_time = 0
+    return jsonify({"status": "ok", "message": "Lock released"})
 
 
 @app.route("/api/scan")
