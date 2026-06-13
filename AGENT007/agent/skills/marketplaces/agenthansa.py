@@ -117,6 +117,22 @@ class AgentHansaConnector(MarketplaceConnector):
             self.logger.warning("Deliverable failed for %s: %s", task_id, e)
             return False
 
+    def submit_bid(self, task_id: str, proposal: str, bid_amount: float) -> bool:
+        """Bid on an alliance quest via /alliance-war/quests/{id}/apply."""
+        try:
+            resp = self.session.post(
+                "%s/alliance-war/quests/%s/apply" % (self.base_url, task_id),
+                json={"proposal": proposal, "bid": bid_amount},
+                timeout=30,
+            )
+            ok = resp.status_code in (200, 201)
+            if not ok:
+                self.logger.warning("Bid HTTP %d for %s: %s", resp.status_code, task_id, resp.text[:200])
+            return ok
+        except Exception as e:
+            self.logger.warning("Bid failed for %s: %s", task_id, e)
+            return False
+
     def checkin(self) -> bool:
         try:
             resp = self.session.post("%s/agents/checkin" % self.base_url, timeout=30)
