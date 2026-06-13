@@ -136,7 +136,7 @@ class AgentCore:
                         "timestamp": datetime.utcnow().isoformat(),
                         "top_tasks": [{"title": t["title"][:30], "reward": t["reward"], "source": t["source"]} for t in top[:3]],
                     }
-                    self.db.add_decision("scan", "bizdev", "Found %d tasks, top reward=$%.2f" % (len(top), top[0]["reward"] if top else 0), self.cycle_count)
+                    self.db.add_decision("scan", "bizdev", "Found %d tasks (pipeline now=%d), top reward=$%.2f" % (len(top), len(bizdev.opportunity_pipeline), top[0]["reward"] if top else 0), self.cycle_count)
                 else:
                     self.last_scan_summary = {"tasks_found": 0, "timestamp": datetime.utcnow().isoformat()}
 
@@ -201,6 +201,7 @@ class AgentCore:
         # re-scanning, which would return 0 new tasks (already marked seen).
         bizdev = self._get("BizDev")
         pipeline = bizdev.opportunity_pipeline if bizdev else []
+        logger.info("Bidding: pipeline=%d entries, sources=%s", len(pipeline), [e.get("source","?") for e in pipeline[:5]])
         bid_count = 0
         for entry in pipeline[:10]:
             if bid_count >= 5:
@@ -234,7 +235,7 @@ class AgentCore:
             except Exception as e:
                 logger.error("Bid error %s: %s", entry.get("task_id", "?"), e)
         if bid_count > 0 or pipeline:
-            self.db.add_decision("bid", "bounty_hunter", "Submitted %d bids from %d pipeline tasks" % (bid_count, len(pipeline)), self.cycle_count)
+            self.db.add_decision("bid", "bounty_hunter", "Submitted %d bids from %d pipeline tasks (first3=%s)" % (bid_count, len(pipeline), str([e.get("source","?")+":"+str(e.get("reward",0)) for e in pipeline[:3]])), self.cycle_count)
             self.db.log_event("evaluation", {"cycle": self.cycle_count, "bids_placed": bid_count, "pipeline_size": len(pipeline)})
 
         # ── ALSO run the rotation maintenance phase ──
