@@ -47,6 +47,7 @@ from flask import jsonify
 
 agent = None
 db = DatabaseManager()
+_cycle_lock = threading.Lock()
 
 try:
     agent = AgentCore(db)
@@ -84,8 +85,9 @@ def _scheduler():
     while True:
         try:
             if agent and has_llm:
-                loop.run_until_complete(agent.run_cycle())
-                logger.info("Scheduler cycle %d done", agent.cycle_count)
+                with _cycle_lock:
+                    loop.run_until_complete(agent.run_cycle())
+                    logger.info("Scheduler cycle %d done", agent.cycle_count)
                 _scheduler_backoff = SCHEDULER_BACKOFF_INITIAL
             elif not has_llm:
                 logger.warning("Skipping cycle — no LLM provider configured")
@@ -140,12 +142,16 @@ def run_cycle():
         return jsonify({"status": "error", "error": "Agent not initialized — check /debug"}), 500
     if not has_llm:
         return jsonify({"status": "error", "error": "No LLM provider configured"}), 500
+    if not _cycle_lock.acquire(blocking=False):
+        return jsonify({"status": "busy", "message": "Cycle already in progress"}), 429
     def _run():
-        loop = _dedicated_event_loop()
         try:
+            loop = _dedicated_event_loop()
             loop.run_until_complete(agent.run_cycle())
         except Exception as e:
             logger.error("Manual cycle failed: %s", e)
+        finally:
+            _cycle_lock.release()
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()
     return {"status": "ok", "message": "Cycle started in background thread"}
