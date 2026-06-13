@@ -60,7 +60,12 @@ class LLMBrain:
 class OmniRouteProvider:
     def __init__(self, base_url: str):
         self.name = "OmniRoute"
-        self.client = OpenAI(base_url=base_url.rstrip("/") + "/v1", api_key="sk-unused")
+        self.client = OpenAI(
+            base_url=base_url.rstrip("/") + "/v1",
+            api_key="sk-unused",
+            timeout=30.0,
+            max_retries=0,
+        )
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         messages = []
@@ -97,7 +102,7 @@ class GeminiProvider:
 class GroqProvider:
     def __init__(self, api_key: str):
         self.name = "Groq"
-        self.client = Groq(api_key=api_key)
+        self.client = Groq(api_key=api_key, timeout=30.0, max_retries=0)
 
     def generate(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         messages = []
