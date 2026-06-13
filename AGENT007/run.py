@@ -206,12 +206,25 @@ def api_pipeline():
     if agent is None:
         return jsonify({"error": "No agent"}), 500
     try:
-        bizdev = agent.csuite.get("BizDev") if hasattr(agent, "csuite") else None
+        has_cs = hasattr(agent, "csuite")
+        cs_keys = list(agent.csuite.agents.keys()) if has_cs and agent.csuite else []
+        bizdev = agent.csuite.get("BizDev") if has_cs and agent.csuite else None
+        debug = {
+            "has_csuite": has_cs,
+            "csuite_agents": cs_keys,
+            "bizdev_found": bizdev is not None,
+            "bizdev_type": type(bizdev).__name__ if bizdev else None,
+        }
         if not bizdev:
-            return jsonify({"error": "No BizDev"}), 500
-        pipe = getattr(bizdev, "opportunity_pipeline", [])
+            return jsonify({"error": "No BizDev", **debug}), 500
+        pipe = getattr(bizdev, "opportunity_pipeline", None)
+        debug["pipe_type"] = type(pipe).__name__ if pipe is not None else "NoneType"
+        debug["pipe_attr_exists"] = hasattr(bizdev, "opportunity_pipeline")
+        if pipe is None:
+            return jsonify({"pipeline_size": -1, "pipeline_is": "None", "top_entries": [], **debug})
         return jsonify({
             "pipeline_size": len(pipe),
+            "pipeline_is": "list",
             "top_entries": [{
                 "task_id": e.get("task_id", "?"),
                 "title": e.get("title", "?")[:40],
@@ -220,6 +233,7 @@ def api_pipeline():
                 "score": e.get("score", 0),
                 "bid": e.get("recommended_bid", 0),
             } for e in pipe[:5]],
+            **debug,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
