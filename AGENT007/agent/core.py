@@ -208,7 +208,7 @@ class AgentCore:
                 break
             mp = next((m for m in bounty.marketplaces if m.name == entry.get("source")), None)
             if not mp:
-                logger.debug("No marketplace match for source='%s' — available: %s", entry.get("source"), [m.name for m in bounty.marketplaces])
+                logger.warning("NO MP MATCH: source='%s' — available names: %s", entry.get("source"), [m.name for m in bounty.marketplaces])
                 continue
             try:
                 task_id = entry.get("task_id", "")

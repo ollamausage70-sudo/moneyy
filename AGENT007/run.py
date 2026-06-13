@@ -228,9 +228,12 @@ def api_pipeline():
         debug["pipe_attr_exists"] = hasattr(bizdev, "opportunity_pipeline")
         if pipe is None:
             return jsonify({"pipeline_size": -1, "pipeline_is": "None", "top_entries": [], **debug})
+        bh = agent.skills.get('bounty_hunter') if hasattr(agent, 'skills') else None
+        marketplace_names = [m.name for m in bh.marketplaces] if bh else []
         return jsonify({
             "pipeline_size": len(pipe),
             "pipeline_is": "list",
+            "marketplace_names": marketplace_names,
             "top_entries": [{
                 "task_id": e.get("task_id", "?"),
                 "title": e.get("title", "?")[:40],
@@ -265,6 +268,28 @@ def scan_debug():
         except Exception as e:
             results[mp.name] = {"error": str(e)[:100]}
     return jsonify({"marketplaces": results, "total_mps": len(bounty.marketplaces)})
+
+
+@app.route("/api/debug/bid_match")
+def debug_bid_match():
+    if agent is None:
+        return jsonify({"error": "No agent"}), 500
+    bh = agent.skills.get("bounty_hunter")
+    if not bh:
+        return jsonify({"error": "No bounty_hunter"}), 500
+    bizdev = agent.csuite.get("BizDev") if hasattr(agent, "csuite") and agent.csuite else None
+    pipe = bizdev.opportunity_pipeline if bizdev else []
+    mp_names = [m.name for m in bh.marketplaces]
+    matches = {}
+    for entry in pipe[:3]:
+        src = entry.get("source", "?")
+        found = next((m.name for m in bh.marketplaces if m.name == src), None)
+        matches[entry.get("task_id","?")[:30]] = {"source": src, "match_found": found is not None, "matched_name": found}
+    return jsonify({
+        "marketplace_names": mp_names,
+        "pipeline_source_examples": list(set(e.get("source","?") for e in pipe[:10])),
+        "first_3_bid_match_test": matches,
+    })
 
 
 @app.route("/train")
