@@ -38,6 +38,10 @@ class BizDevAgent(CLevelAgent):
             self.logger.warning("No bounty_hunter skill available")
             return []
 
+        # Get existing pipeline IDs to preserve entries across cycles
+        existing = {e["task_id"]: e for e in self.opportunity_pipeline}
+
+        # Scan for new opportunities (only NEW tasks per tasks_seen dedup)
         tasks = await self.bounty_hunter.find_opportunities()
         scored = []
         for task in tasks:
@@ -52,11 +56,14 @@ class BizDevAgent(CLevelAgent):
                 "skill_match": self.bounty_hunter.router.pick(task).name if self.bounty_hunter.router.pick(task) else "generic",
             })
 
-        scored.sort(key=lambda x: -x["score"])
-        self.opportunity_pipeline = scored
-        top = scored[:3] if scored else []
+        # Merge: new entries overwrite existing (re-score), keep rest of existing
+        merged = {**existing, **{e["task_id"]: e for e in scored}}
+        merged_list = sorted(merged.values(), key=lambda x: -x["score"])
+        self.opportunity_pipeline = merged_list
+
+        top = merged_list[:3] if merged_list else []
         if top:
-            self.logger.info("Top opportunities: %s", [t["title"][:30] for t in top])
+            self.logger.info("Top opportunities: %s (pipeline=%d)", [t["title"][:30] for t in top], len(merged_list))
         return top
 
     def _score_opportunity(self, task) -> float:
